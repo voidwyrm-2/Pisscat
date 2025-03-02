@@ -14,7 +14,6 @@ namespace Pisscat
         private const string MOD_ID = "nuclear.pisscat";
 
         private int ticksTillUrination = -1;
-        private const float urinatedRoomWaterLevel = 1200f;
 
         internal class PlayerInfo
         {
@@ -35,19 +34,28 @@ namespace Pisscat
             }
         }
 
-        private class EmptyClass { }
+        private class RoomFloodLevel
+        {
+            internal float level;
+
+            internal RoomFloodLevel(float level)
+            {
+                this.level = level;
+            }
+        }
 
         private readonly List<Player> players = new();
         private readonly List<PissTimerLabel> labels = new(); // the weird way I'm handling duplicate labels
-        private readonly ConditionalWeakTable<Water, EmptyClass> waterToChange = new();
         private readonly ConditionalWeakTable<Player, PlayerInfo> pissInfo = new();
+        private readonly ConditionalWeakTable<Room, RoomFloodLevel> roomsToFlood = new();
 
-        private static void PeeThePlayersPants(Player player)
+        private static void PeeThePlayersPants(Player player, ConditionalWeakTable<Room, RoomFloodLevel> roomsToFlood)
         {
             if (player.room.waterObject == null)
                 player.room.AddWater();
-            player.room.waterObject.fWaterLevel = urinatedRoomWaterLevel;
-            //waterToChange.Add(player.room.waterObject, new());
+
+            if (!roomsToFlood.TryGetValue(player.room, out var _))
+                roomsToFlood.Add(player.room, new(player.room.waterObject?.originalWaterLevel ?? 0));
         }
 
         public void OnEnable()
@@ -60,32 +68,27 @@ namespace Pisscat
             On.Player.Destroy += CleanupPlayerUrine;
             On.HUD.HUD.InitSinglePlayerHud += AddSTimerLabels;
             On.HUD.HUD.InitMultiplayerHud += AddMTimerLabels;
-            //On.Water.DrawSprites += NotDrinkingEnoughWater;
-            //On.Water.Destroy += WentToTheBathroom;
-            On.RainWorldGame.ctor += GetOptions;
+            On.RainWorldGame.ctor += ApplyOptions;
+            On.Room.Update += Room_Update;
+
+            //Oracle.ApplyOracleHooks();
         }
 
-        private void GetOptions(On.RainWorldGame.orig_ctor orig, RainWorldGame self, ProcessManager manager)
+        private void Room_Update(On.Room.orig_Update orig, Room self)
+        {
+            orig(self);
+            if (roomsToFlood.TryGetValue(self, out RoomFloodLevel floodLevel) && self.water && self.waterObject != null)
+            {
+                if (floodLevel.level < self.PixelHeight)
+                    floodLevel.level += 4f;
+                self.waterObject.fWaterLevel = floodLevel.level;
+            }
+        }
+
+        private void ApplyOptions(On.RainWorldGame.orig_ctor orig, RainWorldGame self, ProcessManager manager)
         {
             orig(self, manager);
             ticksTillUrination = Options.pissTime.Value * Intervals.Second;
-        }
-
-        private void WentToTheBathroom(On.Water.orig_Destroy orig, Water self)
-        {
-            waterToChange.Remove(self);
-            orig(self);
-        }
-
-        private void NotDrinkingEnoughWater(On.Water.orig_DrawSprites orig, Water self, RoomCamera.SpriteLeaser sLeaser, RoomCamera rCam, float timeStacker, UnityEngine.Vector2 camPos)
-        {
-            if (waterToChange.TryGetValue(self, out var _))
-            {
-                Shader.EnableKeyword("HR");
-                foreach (FSprite sprite in sLeaser.sprites)
-                    sprite.color = new(1f, 1f, 0);
-            }
-            orig(self, sLeaser, rCam, timeStacker, camPos);
         }
 
         private void AddMTimerLabels(On.HUD.HUD.orig_InitMultiplayerHud orig, HUD.HUD self, ArenaGameSession session)
@@ -111,16 +114,15 @@ namespace Pisscat
             orig(self, cam);
             for (int i = 0; i < players.Count; i++)
             {
-                if (i >= labels.Count)
-                {
-                    PissTimerLabel label = new(self, self.fContainers[1], players[i], pissInfo);
-                    labels.Add(label);
-                    self.AddPart(label);
-                }
-                else
+                if (i < labels.Count)
                 {
                     labels[i].AssignToNewPlayer(players[i]);
+                    continue;
                 }
+
+                PissTimerLabel label = new(self, self.fContainers[1], players[i], pissInfo);
+                labels.Add(label);
+                self.AddPart(label);
             }
         }
 
@@ -141,13 +143,15 @@ namespace Pisscat
         {
             if (pissInfo.TryGetValue(self, out PlayerInfo info))
             {
+                Logger.LogDebug($"room of player {self.playerState.playerNumber}('{self.room.abstractRoom.name}'): {self.room.Height}, {self.room.PixelHeight}, {self.room.water}, {self.room.waterObject?.originalWaterLevel}, {self.room.waterObject?.fWaterLevel}");
+
                 // (self.bodyChunks[1].vel.x < 4.7f || self.bodyChunks[1].vel.x > -4.7f) && 
-                if (self.bodyChunks[1].submersion == 0 && !self.room.abstractRoom.gate && !self.room.abstractRoom.shelter && !self.inShortcut)
+                if (self.bodyChunks[1].submersion == 0f && !self.room.abstractRoom.gate && !self.room.abstractRoom.shelter && !self.inShortcut)
                     info.timer.Tick();
 
                 if (info.timer.Ended())
                 {
-                    PeeThePlayersPants(self);
+                    PeeThePlayersPants(self, roomsToFlood);
                     info.timer = new(ticksTillUrination);
                 }
             }
@@ -159,7 +163,7 @@ namespace Pisscat
         {
             orig(self, abstractCreature, world);
 
-            if (!pissInfo.TryGetValue(self, out var _))
+            if (self.SlugCatClass == Enums.Pisscat && !pissInfo.TryGetValue(self, out var _))
             {
                 pissInfo.Add(self, new(new(ticksTillUrination), ticksTillUrination, self.playerState.playerNumber));
                 Logger.LogDebug($"creating info for player {self.playerState.playerNumber}");
