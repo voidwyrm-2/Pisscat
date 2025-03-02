@@ -1,0 +1,19 @@
+﻿{
+	"id": "nuclear.pisscat",
+	"name": "Pisscat",
+	"version": "0.1.0",
+	"authors": "Nuclear Pasta",
+	"description": "A slugcat that really needs to pee.",
+	"requirements": [
+		"slime-cubed.slugbase",
+		"nc.Nuktils"
+	],
+	"requirements_names": [
+		"SlugBase",
+		"Nuktils"
+	],
+	"tags": [
+		"Custom Slugcat",
+		"Game Mechanics"
+	]
+}
